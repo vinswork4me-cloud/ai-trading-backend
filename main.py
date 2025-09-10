@@ -53,6 +53,16 @@ def get_exchange():
 async def health():
     return {"status": "ok"}
 
+@app.get("/ping-binance")
+async def ping_binance():
+    try:
+        ex = get_exchange()
+        # Try to fetch server time or BTC/USDT ticker
+        ticker = ex.fetch_ticker("BTC/USDT")
+        return {"status": "connected", "price": ticker["last"]}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)}
+
 @app.get("/price/{symbol}")
 async def get_price(symbol: str = "BTC/USDT"):
     try:
