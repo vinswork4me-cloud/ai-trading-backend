@@ -116,4 +116,4 @@ async def ema_signal(symbol: str):
             signal = "SELL"
         return {"symbol": symbol, "signal": signal, "price": last["close"]}
     except Exception as e:
-        raise HTTPException(status_code=50_
+        raise HTTPException(status_code=500, detail=str(e))
