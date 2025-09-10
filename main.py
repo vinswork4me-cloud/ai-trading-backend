@@ -2,6 +2,7 @@ import os
 import ccxt
 import asyncpg
 import pandas as pd
+import numpy as np
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,7 +13,7 @@ from fastapi_utils.tasks import repeat_every
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 MODE = os.getenv("MODE", "PAPER")
 
-# Twilio WhatsApp (global sandbox fallback)
+# Twilio WhatsApp
 TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 WHATSAPP_FROM = os.getenv("WHATSAPP_FROM", "whatsapp:+14155238886")
@@ -36,6 +37,7 @@ app.add_middleware(
 
 db_pool = None
 
+# ---------------- DATABASE ----------------
 @app.on_event("startup")
 async def startup():
     global db_pool
@@ -194,7 +196,7 @@ async def ema_signal(user_id: int, symbol: str):
 
 # ---------------- BACKGROUND SCANNER ----------------
 @app.on_event("startup")
-@repeat_every(seconds=60)  # run every 1 min
+@repeat_every(seconds=60)
 async def run_signal_checker():
     try:
         ex = get_exchange()
@@ -214,7 +216,6 @@ async def run_signal_checker():
                     signal = "SELL"
 
                 if signal in ["BUY", "SELL"]:
-                    # notify ALL users in DB
                     async with db_pool.acquire() as conn:
                         rows = await conn.fetch("SELECT user_id FROM user_settings")
                         for row in rows:
