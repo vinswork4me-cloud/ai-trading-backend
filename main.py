@@ -37,11 +37,17 @@ async def shutdown():
         await db_pool.close()
 
 def get_exchange():
-    return ccxt.binance({
-        "apiKey": BINANCE_KEY,
-        "secret": BINANCE_SECRET,
-        "enableRateLimit": True
-    })
+    if BINANCE_KEY and BINANCE_SECRET:
+        return ccxt.binance({
+            "apiKey": BINANCE_KEY,
+            "secret": BINANCE_SECRET,
+            "enableRateLimit": True
+        })
+    else:
+        # Public connection (no keys needed for prices)
+        return ccxt.binance({
+            "enableRateLimit": True
+        })
 
 @app.get("/health")
 async def health():
