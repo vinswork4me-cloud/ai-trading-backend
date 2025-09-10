@@ -11,7 +11,7 @@ MODE = os.getenv("MODE", "PAPER")  # PAPER or LIVE
 
 app = FastAPI()
 
-# Allow frontend (later restrict origins in prod)
+# Allow frontend (later restrict in production)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -44,7 +44,7 @@ def resolve_symbol(symbol: str, markets: dict):
     if symbol in markets:
         return symbol
 
-    # Handle BTC vs XBT difference
+    # Handle BTC vs XBT
     if "BTC" in symbol:
         alt = symbol.replace("BTC", "XBT")
         if alt in markets:
@@ -54,7 +54,7 @@ def resolve_symbol(symbol: str, markets: dict):
         if alt in markets:
             return alt
 
-    # Handle USD vs ZUSD difference
+    # Handle USD vs ZUSD
     if "USD" in symbol:
         alt = symbol.replace("USD", "ZUSD")
         if alt in markets:
@@ -99,7 +99,7 @@ async def get_markets():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/price/{symbol}")
+@app.get("/price/{symbol:path}")
 async def get_price(symbol: str):
     try:
         ex = get_exchange()
@@ -110,7 +110,7 @@ async def get_price(symbol: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/signal/{symbol}")
+@app.get("/signal/{symbol:path}")
 async def ema_signal(symbol: str):
     try:
         ex = get_exchange()
@@ -126,6 +126,11 @@ async def ema_signal(symbol: str):
             signal = "BUY"
         elif last["ema9"] < last["ema21"]:
             signal = "SELL"
-        return {"input": symbol, "resolved": resolved, "signal": signal, "price": last["close"]}
+        return {
+            "input": symbol,
+            "resolved": resolved,
+            "signal": signal,
+            "price": last["close"]
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
