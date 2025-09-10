@@ -44,7 +44,7 @@ def get_exchange():
             "enableRateLimit": True
         })
     else:
-        # Public connection (no keys needed for prices)
+        # Public connection (no keys required for fetching price)
         return ccxt.binance({
             "enableRateLimit": True
         })
@@ -57,6 +57,9 @@ async def health():
 async def get_price(symbol: str = "BTC/USDT"):
     try:
         ex = get_exchange()
+        markets = ex.load_markets()
+        if symbol not in markets:
+            raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
         ticker = ex.fetch_ticker(symbol)
         return {"symbol": symbol, "price": ticker["last"]}
     except Exception as e:
