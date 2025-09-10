@@ -7,8 +7,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # ENV variables
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
-BINANCE_KEY = os.getenv("BINANCE_API_KEY", "")
-BINANCE_SECRET = os.getenv("BINANCE_API_SECRET", "")
 MODE = os.getenv("MODE", "PAPER")  # PAPER or LIVE
 
 app = FastAPI()
@@ -16,7 +14,7 @@ app = FastAPI()
 # Allow frontend (we’ll set Vercel later)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # for dev, later restrict to Vercel domain
+    allow_origins=["*"],  # for dev, later restrict to your frontend domain
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,51 +34,53 @@ async def shutdown():
     if db_pool:
         await db_pool.close()
 
-'''def get_exchange():
-    if BINANCE_KEY and BINANCE_SECRET:
-        return ccxt.binance({
-            "apiKey": BINANCE_KEY,
-            "secret": BINANCE_SECRET,
-            "enableRateLimit": True
-        })
-    else:
-        # Public connection (no keys required for fetching price)
-        return ccxt.binance({
-            "enableRateLimit": True
-        })'''
+# ------------------------------
+# Exchange connection (Kraken)
+# ------------------------------
 def get_exchange():
     return ccxt.kraken({
         "enableRateLimit": True
     })
 
+# ------------------------------
+# Health endpoint
+# ------------------------------
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
-@app.get("/ping-binance")
-async def ping_binance():
+# ------------------------------
+# Ping exchange
+# ------------------------------
+@app.get("/ping-exchange")
+async def ping_exchange():
     try:
         ex = get_exchange()
-        # Try to fetch server time or BTC/USDT ticker
-        ticker = ex.fetch_ticker("BTC/USDT")
+        ticker = ex.fetch_ticker("BTC/USD")  # Kraken uses BTC/USD
         return {"status": "connected", "price": ticker["last"]}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
 
+# ------------------------------
+# Price endpoint
+# ------------------------------
 @app.get("/price/{symbol}")
-async def get_price(symbol: str = "BTC/USDT"):
+async def get_price(symbol: str = "BTC/USD"):
     try:
         ex = get_exchange()
         markets = ex.load_markets()
         if symbol not in markets:
-            raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
+            raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found on Kraken")
         ticker = ex.fetch_ticker(symbol)
         return {"symbol": symbol, "price": ticker["last"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ------------------------------
+# Simple EMA signal endpoint
+# ------------------------------
 @app.get("/signal/{symbol}")
-async def ema_signal(symbol: str = "BTC/USDT"):
+async def ema_signal(symbol: str = "BTC/USD"):
     try:
         ex = get_exchange()
         ohlcv = ex.fetch_ohlcv(symbol, timeframe="1m", limit=100)
