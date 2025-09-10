@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+ccxt
+asyncpg
+pandas
+python-dotenv
