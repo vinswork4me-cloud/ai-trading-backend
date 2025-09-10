@@ -58,8 +58,7 @@ def format_symbol_for_kraken(symbol: str):
         # Add more pairs if needed
     }
     return mapping.get(symbol, symbol)
-
-
+    
 # --------------------------
 # Root endpoint
 # --------------------------
