@@ -54,11 +54,10 @@ def format_symbol_for_kraken(symbol: str):
         "BTC/USD": "XBT/ZUSD",
         "ETH/USD": "ETH/ZUSD",
         "BTC/USDT": "XBT/USDT",
-        "ETH/USDT": "ETH/USDT"
-        # Add more pairs if needed
+        "ETH/USDT": "ETH/USDT",
     }
     return mapping.get(symbol, symbol)
-    
+
 # --------------------------
 # Root endpoint
 # --------------------------
@@ -80,8 +79,9 @@ async def health():
 async def ping_exchange():
     try:
         ex = get_exchange()
-        ticker = ex.fetch_ticker("XBT/USD")
-        return {"status": "connected", "price": ticker["last"]}
+        symbol = format_symbol_for_kraken("BTC/USD")
+        ticker = ex.fetch_ticker(symbol)
+        return {"status": "connected", "symbol": symbol, "price": ticker["last"]}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
 
@@ -110,7 +110,7 @@ async def ema_signal(symbol: str):
         ex = get_exchange()
         symbol = format_symbol_for_kraken(symbol)
         ohlcv = ex.fetch_ohlcv(symbol, timeframe="1m", limit=100)
-        df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
+        df = pd.DataFrame(ohlcv, columns=["ts", "open", "high", "low", "close", "vol"])
         df["ema9"] = df["close"].ewm(span=9).mean()
         df["ema21"] = df["close"].ewm(span=21).mean()
         last = df.iloc[-1]
