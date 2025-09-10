@@ -11,10 +11,10 @@ MODE = os.getenv("MODE", "PAPER")  # PAPER or LIVE
 
 app = FastAPI()
 
-# Allow frontend (for development, later restrict to frontend domain)
+# Allow frontend (we’ll set Vercel later)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # for dev, later restrict to Vercel domain
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -22,9 +22,6 @@ app.add_middleware(
 
 db_pool = None
 
-# --------------------------
-# Database connection (Supabase)
-# --------------------------
 @app.on_event("startup")
 async def startup():
     global db_pool
@@ -37,57 +34,48 @@ async def shutdown():
     if db_pool:
         await db_pool.close()
 
-# --------------------------
-# Kraken exchange connection
-# --------------------------
+# ----------- Exchange Setup -----------
 def get_exchange():
-    return ccxt.kraken({
-        "enableRateLimit": True
-    })
+    return ccxt.kraken({"enableRateLimit": True})
 
-# --------------------------
-# Helper: Kraken symbol formatting
-# --------------------------
 def format_symbol_for_kraken(symbol: str):
     symbol = symbol.upper()
     mapping = {
-        "BTC/USD": "XBT/ZUSD",
-        "ETH/USD": "ETH/ZUSD",
+        "BTC/USD": "XBT/USD",
+        "ETH/USD": "ETH/USD",
         "BTC/USDT": "XBT/USDT",
         "ETH/USDT": "ETH/USDT",
     }
     return mapping.get(symbol, symbol)
 
-# --------------------------
-# Root endpoint
-# --------------------------
+# ----------- Endpoints -----------
+
 @app.get("/")
 async def root():
-    return {"message": "AI Trading Backend is running. Use /health, /price, /signal endpoints."}
+    return {"message": "Kraken Trading API is running"}
 
-# --------------------------
-# Health check
-# --------------------------
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
-# --------------------------
-# Ping exchange
-# --------------------------
 @app.get("/ping-exchange")
 async def ping_exchange():
     try:
         ex = get_exchange()
-        symbol = format_symbol_for_kraken("BTC/USD")
-        ticker = ex.fetch_ticker(symbol)
-        return {"status": "connected", "symbol": symbol, "price": ticker["last"]}
+        ticker = ex.fetch_ticker("XBT/USD")
+        return {"status": "connected", "price": ticker["last"]}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
 
-# --------------------------
-# Price endpoint
-# --------------------------
+@app.get("/markets")
+async def get_markets():
+    try:
+        ex = get_exchange()
+        markets = ex.load_markets()
+        return {"markets": list(markets.keys())[:50]}  # show first 50 markets
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/price/{symbol}")
 async def get_price(symbol: str):
     try:
@@ -101,16 +89,13 @@ async def get_price(symbol: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# --------------------------
-# EMA signal endpoint
-# --------------------------
 @app.get("/signal/{symbol}")
 async def ema_signal(symbol: str):
     try:
         ex = get_exchange()
         symbol = format_symbol_for_kraken(symbol)
         ohlcv = ex.fetch_ohlcv(symbol, timeframe="1m", limit=100)
-        df = pd.DataFrame(ohlcv, columns=["ts", "open", "high", "low", "close", "vol"])
+        df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
         df["ema9"] = df["close"].ewm(span=9).mean()
         df["ema21"] = df["close"].ewm(span=21).mean()
         last = df.iloc[-1]
