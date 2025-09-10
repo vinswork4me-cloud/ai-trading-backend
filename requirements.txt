@@ -1,6 +1,8 @@
 fastapi
-uvicorn[standard]
+uvicorn
 ccxt
 asyncpg
 pandas
-python-dotenv
+requests
+fastapi-utils
+twilio
