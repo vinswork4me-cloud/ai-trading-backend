@@ -50,9 +50,15 @@ def get_exchange():
 # --------------------------
 def format_symbol_for_kraken(symbol: str):
     symbol = symbol.upper()
-    if symbol.startswith("BTC/"):
-        return symbol.replace("BTC", "XBT")
-    return symbol
+    mapping = {
+        "BTC/USD": "XBT/ZUSD",
+        "ETH/USD": "ETH/ZUSD",
+        "BTC/USDT": "XBT/USDT",
+        "ETH/USDT": "ETH/USDT"
+        # Add more pairs if needed
+    }
+    return mapping.get(symbol, symbol)
+
 
 # --------------------------
 # Root endpoint
