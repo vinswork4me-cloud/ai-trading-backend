@@ -11,10 +11,10 @@ MODE = os.getenv("MODE", "PAPER")  # PAPER or LIVE
 
 app = FastAPI()
 
-# Allow frontend (we’ll set Vercel later)
+# Allow frontend (later restrict origins in prod)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # for dev, later restrict to Vercel domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -38,15 +38,36 @@ async def shutdown():
 def get_exchange():
     return ccxt.kraken({"enableRateLimit": True})
 
-def format_symbol_for_kraken(symbol: str):
+def resolve_symbol(symbol: str, markets: dict):
+    """Tries to find the correct Kraken symbol for a user request."""
     symbol = symbol.upper()
-    mapping = {
-        "BTC/USD": "XBT/USD",
-        "ETH/USD": "ETH/USD",
-        "BTC/USDT": "XBT/USDT",
-        "ETH/USDT": "ETH/USDT",
-    }
-    return mapping.get(symbol, symbol)
+    if symbol in markets:
+        return symbol
+
+    # Handle BTC vs XBT difference
+    if "BTC" in symbol:
+        alt = symbol.replace("BTC", "XBT")
+        if alt in markets:
+            return alt
+    if "XBT" in symbol:
+        alt = symbol.replace("XBT", "BTC")
+        if alt in markets:
+            return alt
+
+    # Handle USD vs ZUSD difference
+    if "USD" in symbol:
+        alt = symbol.replace("USD", "ZUSD")
+        if alt in markets:
+            return alt
+    if "ZUSD" in symbol:
+        alt = symbol.replace("ZUSD", "USD")
+        if alt in markets:
+            return alt
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"Symbol {symbol} not found. Try /markets to see available pairs."
+    )
 
 # ----------- Endpoints -----------
 
@@ -62,8 +83,10 @@ async def health():
 async def ping_exchange():
     try:
         ex = get_exchange()
-        ticker = ex.fetch_ticker("XBT/USD")
-        return {"status": "connected", "price": ticker["last"]}
+        markets = ex.load_markets()
+        symbol = resolve_symbol("BTC/USD", markets)
+        ticker = ex.fetch_ticker(symbol)
+        return {"status": "connected", "symbol": symbol, "price": ticker["last"]}
     except Exception as e:
         return {"status": "error", "detail": str(e)}
 
@@ -80,12 +103,10 @@ async def get_markets():
 async def get_price(symbol: str):
     try:
         ex = get_exchange()
-        symbol = format_symbol_for_kraken(symbol)
         markets = ex.load_markets()
-        if symbol not in markets:
-            raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found on Kraken")
-        ticker = ex.fetch_ticker(symbol)
-        return {"symbol": symbol, "price": ticker["last"]}
+        resolved = resolve_symbol(symbol, markets)
+        ticker = ex.fetch_ticker(resolved)
+        return {"input": symbol, "resolved": resolved, "price": ticker["last"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -93,8 +114,9 @@ async def get_price(symbol: str):
 async def ema_signal(symbol: str):
     try:
         ex = get_exchange()
-        symbol = format_symbol_for_kraken(symbol)
-        ohlcv = ex.fetch_ohlcv(symbol, timeframe="1m", limit=100)
+        markets = ex.load_markets()
+        resolved = resolve_symbol(symbol, markets)
+        ohlcv = ex.fetch_ohlcv(resolved, timeframe="1m", limit=100)
         df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
         df["ema9"] = df["close"].ewm(span=9).mean()
         df["ema21"] = df["close"].ewm(span=21).mean()
@@ -104,6 +126,6 @@ async def ema_signal(symbol: str):
             signal = "BUY"
         elif last["ema9"] < last["ema21"]:
             signal = "SELL"
-        return {"symbol": symbol, "signal": signal, "price": last["close"]}
+        return {"input": symbol, "resolved": resolved, "signal": signal, "price": last["close"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
