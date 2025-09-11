@@ -21,7 +21,7 @@ WHATSAPP_FROM = os.getenv("WHATSAPP_FROM", "whatsapp:+14155238886")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 # Default watchlist for background scanner
-WATCHLIST = ["BTC-USD", "ETH-USD"]
+WATCHLIST = ["BTC/USD", "ETH/USD"]
 
 # ---------------- FASTAPI SETUP ----------------
 app = FastAPI()
@@ -63,8 +63,7 @@ def get_exchange():
     return ccxt.kraken({"enableRateLimit": True})
 
 def resolve_symbol(symbol: str, markets: dict):
-    """Normalize and map symbol (BTC-USD -> BTC/USD, then resolve for Kraken)."""
-    symbol = symbol.upper().replace("-", "/")
+    symbol = symbol.upper()
     if symbol in markets: return symbol
     if "BTC" in symbol:
         alt = symbol.replace("BTC", "XBT")
@@ -162,7 +161,7 @@ async def get_settings(user_id: int):
         raise HTTPException(status_code=404, detail="User not found")
     return settings
 
-@app.get("/price/{symbol}")
+@app.get("/price/{symbol:path}")
 async def get_price(symbol: str):
     try:
         ex = get_exchange()
@@ -173,7 +172,7 @@ async def get_price(symbol: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/signal/{user_id}/{symbol}")
+@app.get("/signal/{user_id}/{symbol:path}")
 async def ema_signal(user_id: int, symbol: str):
     try:
         ex = get_exchange()
@@ -216,6 +215,16 @@ async def get_markets():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ---------------- TEST MESSAGE ENDPOINT ----------------
+@app.get("/test-message/{user_id}")
+async def test_message(user_id: int):
+    """Send a test message to WhatsApp and Telegram for this user"""
+    try:
+        await notify_user(user_id, f"🟢 Test message from Trading AI backend")
+        return {"status": "ok", "message": "Test message sent"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ---------------- BACKGROUND SCANNER ----------------
 @app.on_event("startup")
 @repeat_every(seconds=60)  # run every 1 min
@@ -241,12 +250,7 @@ async def run_signal_checker():
                     async with db_pool.acquire() as conn:
                         rows = await conn.fetch("SELECT user_id FROM user_settings")
                         for row in rows:
-                            await notify_user(
-                                row["user_id"],
-                                f"⏰ {signal} Signal (auto) for {resolved} at {last['close']}"
-                            )
-                else:
-                    print(f"ℹ️ Signal {signal} for {resolved}, but DB not connected")
+                            await notify_user(row["user_id"], f"⏰ {signal} Signal (auto) for {resolved} at {last['close']}")
             except Exception as inner_err:
                 print(f"⚠️ Error scanning {symbol}: {inner_err}")
     except Exception as e:
