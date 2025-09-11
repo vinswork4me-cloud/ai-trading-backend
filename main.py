@@ -21,7 +21,7 @@ WHATSAPP_FROM = os.getenv("WHATSAPP_FROM", "whatsapp:+14155238886")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 # Default watchlist for background scanner
-WATCHLIST = ["BTC-USD", "ETH-USD"]
+WATCHLIST = ["BTC/USD", "ETH/USD"]
 
 # ---------------- FASTAPI SETUP ----------------
 app = FastAPI()
