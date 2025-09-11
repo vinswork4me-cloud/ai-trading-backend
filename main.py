@@ -167,4 +167,86 @@ async def get_price(symbol: str):
         ex = get_exchange()
         markets = ex.load_markets()
         resolved = resolve_symbol(symbol, markets)
-        tic
+        ticker = ex.fetch_ticker(resolved)
+        return {"input": symbol, "resolved": resolved, "price": ticker["last"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/signal/{user_id}/{symbol:path}")
+async def ema_signal(user_id: int, symbol: str):
+    try:
+        ex = get_exchange()
+        markets = ex.load_markets()
+        resolved = resolve_symbol(symbol, markets)
+        ohlcv = ex.fetch_ohlcv(resolved, timeframe="1m", limit=100)
+        df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
+        df["ema9"] = df["close"].ewm(span=9).mean()
+        df["ema21"] = df["close"].ewm(span=21).mean()
+        last = df.iloc[-1]
+        signal = "HOLD"
+        if last["ema9"] > last["ema21"]:
+            signal = "BUY"
+        elif last["ema9"] < last["ema21"]:
+            signal = "SELL"
+
+        if signal in ["BUY", "SELL"]:
+            await notify_user(user_id, f"⚡ {signal} Signal for {resolved} at {last['close']}")
+
+        return {"user_id": user_id, "input": symbol, "resolved": resolved, "signal": signal, "price": last["close"]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ---------------- EXTRA ENDPOINTS ----------------
+@app.get("/ping-exchange")
+async def ping_exchange():
+    """Check if exchange API is alive"""
+    try:
+        ex = get_exchange()
+        ex.load_markets()
+        return {"status": "ok", "exchange": "Kraken"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/markets")
+async def get_markets():
+    """Return available trading markets"""
+    try:
+        ex = get_exchange()
+        markets = ex.load_markets()
+        return {"count": len(markets), "markets": list(markets.keys())}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ---------------- BACKGROUND SCANNER ----------------
+@app.on_event("startup")
+@repeat_every(seconds=60)  # run every 1 min
+async def run_signal_checker():
+    try:
+        ex = get_exchange()
+        markets = ex.load_markets()
+        for symbol in WATCHLIST:
+            try:
+                resolved = resolve_symbol(symbol, markets)
+                ohlcv = ex.fetch_ohlcv(resolved, timeframe="1m", limit=100)
+                df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
+                df["ema9"] = df["close"].ewm(span=9).mean()
+                df["ema21"] = df["close"].ewm(span=21).mean()
+                last = df.iloc[-1]
+                signal = "HOLD"
+                if last["ema9"] > last["ema21"]:
+                    signal = "BUY"
+                elif last["ema9"] < last["ema21"]:
+                    signal = "SELL"
+
+                if signal in ["BUY", "SELL"]:
+                    if db_pool:
+                        async with db_pool.acquire() as conn:
+                            rows = await conn.fetch("SELECT user_id FROM user_settings")
+                            for row in rows:
+                                await notify_user(row["user_id"], f"⏰ {signal} Signal (auto) for {resolved} at {last['close']}")
+                    else:
+                        print(f"ℹ️ No DB configured. Skipping notifications for {resolved}.")
+            except Exception as inner_err:
+                print(f"⚠️ Error scanning {symbol}: {inner_err}")
+    except Exception as e:
+        print(f"❌ Background scanner failed: {e}")
