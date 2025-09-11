@@ -2,7 +2,6 @@ fastapi==0.115.0
 uvicorn==0.30.1
 ccxt==4.3.59
 asyncpg==0.29.0
-pandas==2.2.2
 numpy==1.26.4
 requests==2.32.3
 fastapi-utils==0.7.0
