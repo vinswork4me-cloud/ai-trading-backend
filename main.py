@@ -21,7 +21,7 @@ WHATSAPP_FROM = os.getenv("WHATSAPP_FROM", "whatsapp:+14155238886")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 # Default watchlist for background scanner
-WATCHLIST = ["BTC/USD", "ETH/USD"]
+WATCHLIST = ["BTC-USD", "ETH-USD"]
 
 # ---------------- FASTAPI SETUP ----------------
 app = FastAPI()
@@ -63,7 +63,8 @@ def get_exchange():
     return ccxt.kraken({"enableRateLimit": True})
 
 def resolve_symbol(symbol: str, markets: dict):
-    symbol = symbol.upper()
+    """Normalize and map symbol (BTC-USD -> BTC/USD, then resolve for Kraken)."""
+    symbol = symbol.upper().replace("-", "/")
     if symbol in markets: return symbol
     if "BTC" in symbol:
         alt = symbol.replace("BTC", "XBT")
@@ -161,7 +162,7 @@ async def get_settings(user_id: int):
         raise HTTPException(status_code=404, detail="User not found")
     return settings
 
-@app.get("/price/{symbol:path}")
+@app.get("/price/{symbol}")
 async def get_price(symbol: str):
     try:
         ex = get_exchange()
@@ -172,7 +173,7 @@ async def get_price(symbol: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/signal/{user_id}/{symbol:path}")
+@app.get("/signal/{user_id}/{symbol}")
 async def ema_signal(user_id: int, symbol: str):
     try:
         ex = get_exchange()
@@ -199,7 +200,6 @@ async def ema_signal(user_id: int, symbol: str):
 # ---------------- EXTRA ENDPOINTS ----------------
 @app.get("/ping-exchange")
 async def ping_exchange():
-    """Check if exchange API is alive"""
     try:
         ex = get_exchange()
         ex.load_markets()
@@ -209,7 +209,6 @@ async def ping_exchange():
 
 @app.get("/markets")
 async def get_markets():
-    """Return available trading markets"""
     try:
         ex = get_exchange()
         markets = ex.load_markets()
@@ -226,8 +225,6 @@ async def run_signal_checker():
         markets = ex.load_markets()
         for symbol in WATCHLIST:
             try:
-                # Convert BTC-USD -> BTC/USD
-                symbol = symbol.replace("-", "/")
                 resolved = resolve_symbol(symbol, markets)
                 ohlcv = ex.fetch_ohlcv(resolved, timeframe="1m", limit=100)
                 df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
@@ -241,7 +238,6 @@ async def run_signal_checker():
                     signal = "SELL"
 
                 if signal in ["BUY", "SELL"] and db_pool:
-                    # notify ALL users in DB
                     async with db_pool.acquire() as conn:
                         rows = await conn.fetch("SELECT user_id FROM user_settings")
                         for row in rows:
