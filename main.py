@@ -1,10 +1,8 @@
 import os
-import sys
 import ccxt
 import asyncpg
-import pandas as pd
 import requests
-from fastapi import FastAPI, HTTPException, Body
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from twilio.rest import Client
 from fastapi_utils.tasks import repeat_every
@@ -37,7 +35,39 @@ app.add_middleware(
 
 db_pool = None
 
+# ---------------- EXCHANGE ----------------
+def get_exchange():
+    return ccxt.kraken({"enableRateLimit": True})
 
+def resolve_symbol(symbol: str, markets: dict):
+    symbol = symbol.upper()
+    if symbol in markets: return symbol
+    if "BTC" in symbol:
+        alt = symbol.replace("BTC", "XBT")
+        if alt in markets: return alt
+    if "XBT" in symbol:
+        alt = symbol.replace("XBT", "BTC")
+        if alt in markets: return alt
+    if "USD" in symbol:
+        alt = symbol.replace("USD", "ZUSD")
+        if alt in markets: return alt
+    if "ZUSD" in symbol:
+        alt = symbol.replace("ZUSD", "USD")
+        if alt in markets: return alt
+    raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
+
+# ---------------- EMA CALCULATOR ----------------
+def ema(values, period):
+    k = 2 / (period + 1)
+    ema_vals = []
+    for i, v in enumerate(values):
+        if i == 0:
+            ema_vals.append(v)
+        else:
+            ema_vals.append(v * k + ema_vals[-1] * (1 - k))
+    return ema_vals
+
+# ---------------- DB HELPERS ----------------
 @app.on_event("startup")
 async def startup():
     global db_pool
@@ -54,48 +84,16 @@ async def startup():
             );
             """)
 
-
 @app.on_event("shutdown")
 async def shutdown():
     global db_pool
     if db_pool:
         await db_pool.close()
 
-
-# ---------------- EXCHANGE ----------------
-def get_exchange():
-    return ccxt.kraken({"enableRateLimit": True})
-
-
-def resolve_symbol(symbol: str, markets: dict):
-    symbol = symbol.upper()
-    if symbol in markets:
-        return symbol
-    if "BTC" in symbol:
-        alt = symbol.replace("BTC", "XBT")
-        if alt in markets:
-            return alt
-    if "XBT" in symbol:
-        alt = symbol.replace("XBT", "BTC")
-        if alt in markets:
-            return alt
-    if "USD" in symbol:
-        alt = symbol.replace("USD", "ZUSD")
-        if alt in markets:
-            return alt
-    if "ZUSD" in symbol:
-        alt = symbol.replace("ZUSD", "USD")
-        if alt in markets:
-            return alt
-    raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
-
-
-# ---------------- DB HELPERS ----------------
 async def get_user_settings(user_id: int):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM user_settings WHERE user_id=$1", user_id)
         return dict(row) if row else None
-
 
 async def update_user_settings(user_id: int, settings: dict):
     async with db_pool.acquire() as conn:
@@ -109,7 +107,6 @@ async def update_user_settings(user_id: int, settings: dict):
                 telegram_chat_id = EXCLUDED.telegram_chat_id
         """, user_id, settings.get("notify_whatsapp"), settings.get("notify_telegram"),
              settings.get("phone_number"), settings.get("telegram_chat_id"))
-
 
 # ---------------- NOTIFICATIONS ----------------
 def send_whatsapp_message(message: str, phone_number: str):
@@ -127,7 +124,6 @@ def send_whatsapp_message(message: str, phone_number: str):
     except Exception as e:
         print(f"❌ WhatsApp failed: {e}")
 
-
 def send_telegram_message(message: str, chat_id: str):
     if not (TELEGRAM_TOKEN and chat_id):
         print("⚠️ Telegram not configured")
@@ -135,42 +131,34 @@ def send_telegram_message(message: str, chat_id: str):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         payload = {"chat_id": chat_id, "text": message}
-        requests.post(url, json=payload, timeout=10)
+        requests.post(url, json=payload)
         print(f"✅ Telegram sent: {message}")
     except Exception as e:
         print(f"❌ Telegram failed: {e}")
-
 
 async def notify_user(user_id: int, message: str):
     settings = await get_user_settings(user_id)
     if not settings:
         print(f"⚠️ No settings for user {user_id}")
         return
-    if settings.get("notify_whatsapp"):
-        send_whatsapp_message(message, settings.get("phone_number"))
-    if settings.get("notify_telegram"):
-        send_telegram_message(message, settings.get("telegram_chat_id"))
-
+    if settings["notify_whatsapp"]:
+        send_whatsapp_message(message, settings["phone_number"])
+    if settings["notify_telegram"]:
+        send_telegram_message(message, settings["telegram_chat_id"])
 
 # ---------------- ENDPOINTS ----------------
 @app.get("/")
 async def root():
-    return {
-        "message": "Trading AI with Kraken + Notifications is running 🚀",
-        "python_version": sys.version
-    }
-
+    return {"message": "Trading AI with Kraken + Notifications is running 🚀"}
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
-
 @app.post("/settings/update/{user_id}")
-async def update_settings(user_id: int, settings: dict = Body(...)):
+async def update_settings(user_id: int, settings: dict):
     await update_user_settings(user_id, settings)
     return {"status": "ok", "user_id": user_id, "settings": settings}
-
 
 @app.get("/settings/get/{user_id}")
 async def get_settings(user_id: int):
@@ -178,7 +166,6 @@ async def get_settings(user_id: int):
     if not settings:
         raise HTTPException(status_code=404, detail="User not found")
     return settings
-
 
 @app.get("/price/{symbol:path}")
 async def get_price(symbol: str):
@@ -191,7 +178,6 @@ async def get_price(symbol: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 @app.get("/signal/{user_id}/{symbol:path}")
 async def ema_signal(user_id: int, symbol: str):
     try:
@@ -199,27 +185,28 @@ async def ema_signal(user_id: int, symbol: str):
         markets = ex.load_markets()
         resolved = resolve_symbol(symbol, markets)
         ohlcv = ex.fetch_ohlcv(resolved, timeframe="1m", limit=100)
-        df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
-        df["ema9"] = df["close"].ewm(span=9).mean()
-        df["ema21"] = df["close"].ewm(span=21).mean()
-        last = df.iloc[-1]
+        closes = [c[4] for c in ohlcv]
+
+        ema9 = ema(closes, 9)
+        ema21 = ema(closes, 21)
+        last_price = closes[-1]
+
         signal = "HOLD"
-        if last["ema9"] > last["ema21"]:
+        if ema9[-1] > ema21[-1]:
             signal = "BUY"
-        elif last["ema9"] < last["ema21"]:
+        elif ema9[-1] < ema21[-1]:
             signal = "SELL"
 
         if signal in ["BUY", "SELL"]:
-            await notify_user(user_id, f"⚡ {signal} Signal for {resolved} at {last['close']}")
+            await notify_user(user_id, f"⚡ {signal} Signal for {resolved} at {last_price}")
 
-        return {"user_id": user_id, "input": symbol, "resolved": resolved, "signal": signal, "price": last["close"]}
+        return {"user_id": user_id, "input": symbol, "resolved": resolved, "signal": signal, "price": last_price}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-
 # ---------------- BACKGROUND SCANNER ----------------
 @app.on_event("startup")
-@repeat_every(seconds=60)  # run every 1 min
+@repeat_every(seconds=60)
 async def run_signal_checker():
     try:
         ex = get_exchange()
@@ -228,21 +215,23 @@ async def run_signal_checker():
             try:
                 resolved = resolve_symbol(symbol, markets)
                 ohlcv = ex.fetch_ohlcv(resolved, timeframe="1m", limit=100)
-                df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
-                df["ema9"] = df["close"].ewm(span=9).mean()
-                df["ema21"] = df["close"].ewm(span=21).mean()
-                last = df.iloc[-1]
+                closes = [c[4] for c in ohlcv]
+
+                ema9 = ema(closes, 9)
+                ema21 = ema(closes, 21)
+                last_price = closes[-1]
+
                 signal = "HOLD"
-                if last["ema9"] > last["ema21"]:
+                if ema9[-1] > ema21[-1]:
                     signal = "BUY"
-                elif last["ema9"] < last["ema21"]:
+                elif ema9[-1] < ema21[-1]:
                     signal = "SELL"
 
                 if signal in ["BUY", "SELL"]:
                     async with db_pool.acquire() as conn:
                         rows = await conn.fetch("SELECT user_id FROM user_settings")
                         for row in rows:
-                            await notify_user(row["user_id"], f"⏰ {signal} Signal (auto) for {resolved} at {last['close']}")
+                            await notify_user(row["user_id"], f"⏰ {signal} Signal (auto) for {resolved} at {last_price}")
             except Exception as inner_err:
                 print(f"⚠️ Error scanning {symbol}: {inner_err}")
     except Exception as e:
