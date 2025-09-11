@@ -1,10 +1,10 @@
 import os
+import sys
 import ccxt
 import asyncpg
 import pandas as pd
-import numpy as np
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from twilio.rest import Client
 from fastapi_utils.tasks import repeat_every
@@ -13,7 +13,7 @@ from fastapi_utils.tasks import repeat_every
 SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
 MODE = os.getenv("MODE", "PAPER")
 
-# Twilio WhatsApp
+# Twilio WhatsApp (global sandbox fallback)
 TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 WHATSAPP_FROM = os.getenv("WHATSAPP_FROM", "whatsapp:+14155238886")
@@ -37,7 +37,7 @@ app.add_middleware(
 
 db_pool = None
 
-# ---------------- DATABASE ----------------
+
 @app.on_event("startup")
 async def startup():
     global db_pool
@@ -54,38 +54,48 @@ async def startup():
             );
             """)
 
+
 @app.on_event("shutdown")
 async def shutdown():
     global db_pool
     if db_pool:
         await db_pool.close()
 
+
 # ---------------- EXCHANGE ----------------
 def get_exchange():
     return ccxt.kraken({"enableRateLimit": True})
 
+
 def resolve_symbol(symbol: str, markets: dict):
     symbol = symbol.upper()
-    if symbol in markets: return symbol
+    if symbol in markets:
+        return symbol
     if "BTC" in symbol:
         alt = symbol.replace("BTC", "XBT")
-        if alt in markets: return alt
+        if alt in markets:
+            return alt
     if "XBT" in symbol:
         alt = symbol.replace("XBT", "BTC")
-        if alt in markets: return alt
+        if alt in markets:
+            return alt
     if "USD" in symbol:
         alt = symbol.replace("USD", "ZUSD")
-        if alt in markets: return alt
+        if alt in markets:
+            return alt
     if "ZUSD" in symbol:
         alt = symbol.replace("ZUSD", "USD")
-        if alt in markets: return alt
+        if alt in markets:
+            return alt
     raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
+
 
 # ---------------- DB HELPERS ----------------
 async def get_user_settings(user_id: int):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM user_settings WHERE user_id=$1", user_id)
         return dict(row) if row else None
+
 
 async def update_user_settings(user_id: int, settings: dict):
     async with db_pool.acquire() as conn:
@@ -99,6 +109,7 @@ async def update_user_settings(user_id: int, settings: dict):
                 telegram_chat_id = EXCLUDED.telegram_chat_id
         """, user_id, settings.get("notify_whatsapp"), settings.get("notify_telegram"),
              settings.get("phone_number"), settings.get("telegram_chat_id"))
+
 
 # ---------------- NOTIFICATIONS ----------------
 def send_whatsapp_message(message: str, phone_number: str):
@@ -116,6 +127,7 @@ def send_whatsapp_message(message: str, phone_number: str):
     except Exception as e:
         print(f"❌ WhatsApp failed: {e}")
 
+
 def send_telegram_message(message: str, chat_id: str):
     if not (TELEGRAM_TOKEN and chat_id):
         print("⚠️ Telegram not configured")
@@ -123,34 +135,42 @@ def send_telegram_message(message: str, chat_id: str):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         payload = {"chat_id": chat_id, "text": message}
-        requests.post(url, json=payload)
+        requests.post(url, json=payload, timeout=10)
         print(f"✅ Telegram sent: {message}")
     except Exception as e:
         print(f"❌ Telegram failed: {e}")
+
 
 async def notify_user(user_id: int, message: str):
     settings = await get_user_settings(user_id)
     if not settings:
         print(f"⚠️ No settings for user {user_id}")
         return
-    if settings["notify_whatsapp"]:
-        send_whatsapp_message(message, settings["phone_number"])
-    if settings["notify_telegram"]:
-        send_telegram_message(message, settings["telegram_chat_id"])
+    if settings.get("notify_whatsapp"):
+        send_whatsapp_message(message, settings.get("phone_number"))
+    if settings.get("notify_telegram"):
+        send_telegram_message(message, settings.get("telegram_chat_id"))
+
 
 # ---------------- ENDPOINTS ----------------
 @app.get("/")
 async def root():
-    return {"message": "Trading AI with Kraken + Notifications is running 🚀"}
+    return {
+        "message": "Trading AI with Kraken + Notifications is running 🚀",
+        "python_version": sys.version
+    }
+
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
+
 @app.post("/settings/update/{user_id}")
-async def update_settings(user_id: int, settings: dict):
+async def update_settings(user_id: int, settings: dict = Body(...)):
     await update_user_settings(user_id, settings)
     return {"status": "ok", "user_id": user_id, "settings": settings}
+
 
 @app.get("/settings/get/{user_id}")
 async def get_settings(user_id: int):
@@ -158,6 +178,7 @@ async def get_settings(user_id: int):
     if not settings:
         raise HTTPException(status_code=404, detail="User not found")
     return settings
+
 
 @app.get("/price/{symbol:path}")
 async def get_price(symbol: str):
@@ -169,6 +190,7 @@ async def get_price(symbol: str):
         return {"input": symbol, "resolved": resolved, "price": ticker["last"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/signal/{user_id}/{symbol:path}")
 async def ema_signal(user_id: int, symbol: str):
@@ -194,9 +216,10 @@ async def ema_signal(user_id: int, symbol: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 # ---------------- BACKGROUND SCANNER ----------------
 @app.on_event("startup")
-@repeat_every(seconds=60)
+@repeat_every(seconds=60)  # run every 1 min
 async def run_signal_checker():
     try:
         ex = get_exchange()
