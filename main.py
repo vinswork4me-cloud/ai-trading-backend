@@ -21,7 +21,7 @@ WHATSAPP_FROM = os.getenv("WHATSAPP_FROM", "whatsapp:+14155238886")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
 # Default watchlist for background scanner
-WATCHLIST = ["BTC/USD", "ETH/USD"]
+WATCHLIST = ["BTC-USD", "ETH-USD"]
 
 # ---------------- FASTAPI SETUP ----------------
 app = FastAPI()
@@ -227,7 +227,7 @@ async def run_signal_checker():
         markets = ex.load_markets()
         for symbol in WATCHLIST:
             try:
-                # Convert BTC-USD -> BTC/USD for Kraken
+                # Convert BTC-USD -> BTC-USD for Kraken
                 symbol = symbol.replace("-", "/")
                 resolved = resolve_symbol(symbol, markets)
                 ohlcv = ex.fetch_ohlcv(resolved, timeframe="1m", limit=100)
