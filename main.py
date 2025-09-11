@@ -1,6 +1,7 @@
 import os
 import ccxt
 import asyncpg
+import pandas as pd
 import requests
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,39 +36,6 @@ app.add_middleware(
 
 db_pool = None
 
-# ---------------- EXCHANGE ----------------
-def get_exchange():
-    return ccxt.kraken({"enableRateLimit": True})
-
-def resolve_symbol(symbol: str, markets: dict):
-    symbol = symbol.upper()
-    if symbol in markets: return symbol
-    if "BTC" in symbol:
-        alt = symbol.replace("BTC", "XBT")
-        if alt in markets: return alt
-    if "XBT" in symbol:
-        alt = symbol.replace("XBT", "BTC")
-        if alt in markets: return alt
-    if "USD" in symbol:
-        alt = symbol.replace("USD", "ZUSD")
-        if alt in markets: return alt
-    if "ZUSD" in symbol:
-        alt = symbol.replace("ZUSD", "USD")
-        if alt in markets: return alt
-    raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
-
-# ---------------- EMA CALCULATOR ----------------
-def ema(values, period):
-    k = 2 / (period + 1)
-    ema_vals = []
-    for i, v in enumerate(values):
-        if i == 0:
-            ema_vals.append(v)
-        else:
-            ema_vals.append(v * k + ema_vals[-1] * (1 - k))
-    return ema_vals
-
-# ---------------- DB HELPERS ----------------
 @app.on_event("startup")
 async def startup():
     global db_pool
@@ -90,6 +58,28 @@ async def shutdown():
     if db_pool:
         await db_pool.close()
 
+# ---------------- EXCHANGE ----------------
+def get_exchange():
+    return ccxt.kraken({"enableRateLimit": True})
+
+def resolve_symbol(symbol: str, markets: dict):
+    symbol = symbol.upper()
+    if symbol in markets: return symbol
+    if "BTC" in symbol:
+        alt = symbol.replace("BTC", "XBT")
+        if alt in markets: return alt
+    if "XBT" in symbol:
+        alt = symbol.replace("XBT", "BTC")
+        if alt in markets: return alt
+    if "USD" in symbol:
+        alt = symbol.replace("USD", "ZUSD")
+        if alt in markets: return alt
+    if "ZUSD" in symbol:
+        alt = symbol.replace("ZUSD", "USD")
+        if alt in markets: return alt
+    raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
+
+# ---------------- DB HELPERS ----------------
 async def get_user_settings(user_id: int):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM user_settings WHERE user_id=$1", user_id)
@@ -185,28 +175,26 @@ async def ema_signal(user_id: int, symbol: str):
         markets = ex.load_markets()
         resolved = resolve_symbol(symbol, markets)
         ohlcv = ex.fetch_ohlcv(resolved, timeframe="1m", limit=100)
-        closes = [c[4] for c in ohlcv]
-
-        ema9 = ema(closes, 9)
-        ema21 = ema(closes, 21)
-        last_price = closes[-1]
-
+        df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
+        df["ema9"] = df["close"].ewm(span=9).mean()
+        df["ema21"] = df["close"].ewm(span=21).mean()
+        last = df.iloc[-1]
         signal = "HOLD"
-        if ema9[-1] > ema21[-1]:
+        if last["ema9"] > last["ema21"]:
             signal = "BUY"
-        elif ema9[-1] < ema21[-1]:
+        elif last["ema9"] < last["ema21"]:
             signal = "SELL"
 
         if signal in ["BUY", "SELL"]:
-            await notify_user(user_id, f"⚡ {signal} Signal for {resolved} at {last_price}")
+            await notify_user(user_id, f"⚡ {signal} Signal for {resolved} at {last['close']}")
 
-        return {"user_id": user_id, "input": symbol, "resolved": resolved, "signal": signal, "price": last_price}
+        return {"user_id": user_id, "input": symbol, "resolved": resolved, "signal": signal, "price": last["close"]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 # ---------------- BACKGROUND SCANNER ----------------
 @app.on_event("startup")
-@repeat_every(seconds=60)
+@repeat_every(seconds=60)  # run every 1 min
 async def run_signal_checker():
     try:
         ex = get_exchange()
@@ -215,23 +203,22 @@ async def run_signal_checker():
             try:
                 resolved = resolve_symbol(symbol, markets)
                 ohlcv = ex.fetch_ohlcv(resolved, timeframe="1m", limit=100)
-                closes = [c[4] for c in ohlcv]
-
-                ema9 = ema(closes, 9)
-                ema21 = ema(closes, 21)
-                last_price = closes[-1]
-
+                df = pd.DataFrame(ohlcv, columns=["ts","open","high","low","close","vol"])
+                df["ema9"] = df["close"].ewm(span=9).mean()
+                df["ema21"] = df["close"].ewm(span=21).mean()
+                last = df.iloc[-1]
                 signal = "HOLD"
-                if ema9[-1] > ema21[-1]:
+                if last["ema9"] > last["ema21"]:
                     signal = "BUY"
-                elif ema9[-1] < ema21[-1]:
+                elif last["ema9"] < last["ema21"]:
                     signal = "SELL"
 
                 if signal in ["BUY", "SELL"]:
+                    # notify ALL users in DB
                     async with db_pool.acquire() as conn:
                         rows = await conn.fetch("SELECT user_id FROM user_settings")
                         for row in rows:
-                            await notify_user(row["user_id"], f"⏰ {signal} Signal (auto) for {resolved} at {last_price}")
+                            await notify_user(row["user_id"], f"⏰ {signal} Signal (auto) for {resolved} at {last['close']}")
             except Exception as inner_err:
                 print(f"⚠️ Error scanning {symbol}: {inner_err}")
     except Exception as e:
