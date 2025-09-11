@@ -218,7 +218,6 @@ async def get_markets():
         raise HTTPException(status_code=500, detail=str(e))
 
 # ---------------- BACKGROUND SCANNER ----------------
-# ---------------- BACKGROUND SCANNER ----------------
 @app.on_event("startup")
 @repeat_every(seconds=60)  # run every 1 min
 async def run_signal_checker():
@@ -227,7 +226,7 @@ async def run_signal_checker():
         markets = ex.load_markets()
         for symbol in WATCHLIST:
             try:
-                # Convert BTC-USD -> BTC-USD for Kraken
+                # Convert BTC-USD -> BTC/USD
                 symbol = symbol.replace("-", "/")
                 resolved = resolve_symbol(symbol, markets)
                 ohlcv = ex.fetch_ohlcv(resolved, timeframe="1m", limit=100)
@@ -241,12 +240,17 @@ async def run_signal_checker():
                 elif last["ema9"] < last["ema21"]:
                     signal = "SELL"
 
-                if signal in ["BUY", "SELL"]:
+                if signal in ["BUY", "SELL"] and db_pool:
                     # notify ALL users in DB
                     async with db_pool.acquire() as conn:
                         rows = await conn.fetch("SELECT user_id FROM user_settings")
                         for row in rows:
-                            await notify_user(row["user_id"], f"⏰ {signal} Signal (auto) for {resolved} at {last['close']}")
+                            await notify_user(
+                                row["user_id"],
+                                f"⏰ {signal} Signal (auto) for {resolved} at {last['close']}"
+                            )
+                else:
+                    print(f"ℹ️ Signal {signal} for {resolved}, but DB not connected")
             except Exception as inner_err:
                 print(f"⚠️ Error scanning {symbol}: {inner_err}")
     except Exception as e:
